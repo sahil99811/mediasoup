@@ -292,6 +292,6 @@ const  createWebRtcTransport = async (roomName,callback) => {
     });
   }
 };
-server.listen(port, () => {
+server.listen(process.env.PORT || 5000, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
