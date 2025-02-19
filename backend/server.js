@@ -253,12 +253,13 @@ const  createWebRtcTransport = async (roomName,callback) => {
     const webRtcTransportOptions = {
       listenIps: [
         {
-          ip: process.env.Announce_Ip
+          ip: process.env.Announce_Ip,
         },
       ],
       enableUdp: true,
       enableTcp: true,
       preferUdp: true,
+      portRange: { min: 40000, max: 49999 },
     };
     const router=rooms[roomName].router;
     const transport = await router.createWebRtcTransport(
