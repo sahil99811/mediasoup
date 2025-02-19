@@ -256,9 +256,9 @@ const  createWebRtcTransport = async (roomName,callback) => {
           ip: process.env.Announce_Ip,
         },
       ],
-      enableUdp: true,
-      enableTcp: true,
-      preferUdp: true,
+      enableUdp: false, // Disable UDP
+      enableTcp: true, // Use only TCP
+      preferUdp: false, // Prefer TCP over UDP
       portRange: { min: 40000, max: 49999 },
     };
     const router=rooms[roomName].router;
