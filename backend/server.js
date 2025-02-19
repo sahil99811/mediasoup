@@ -253,7 +253,8 @@ const  createWebRtcTransport = async (roomName,callback) => {
     const webRtcTransportOptions = {
       listenIps: [
         {
-          ip: process.env.Announce_Ip,
+          ip: "0.0.0.0",
+          announcedIp: process.env.Announce_Ip,
         },
       ],
       enableUdp: false, // Disable UDP
