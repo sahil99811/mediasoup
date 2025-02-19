@@ -32,7 +32,7 @@ export default function RoomJoin() {
   };
 
   useEffect(() => {
-    const socket = io("https://mediasoup-ye8m.onrender.com/mediasoup");
+    const socket = io("http://localhost:5000/mediasoup");
     setSocket(socket);
     socket.on("connection-success", ({ socketId }) => {
       console.log("connection established succesffuly");
