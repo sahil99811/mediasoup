@@ -5,9 +5,10 @@ const cors = require("cors");
 const mediasoup = require("mediasoup");
 const { send } = require("process");
 const app = express();
-const port = process.env.port;
+
 const server = http.createServer(app);
 require("dotenv").config();
+const port = process.env.PORT;
 app.use(
   cors({
     origin: "*",
@@ -252,8 +253,7 @@ const  createWebRtcTransport = async (roomName,callback) => {
     const webRtcTransportOptions = {
       listenIps: [
         {
-          ip: "0.0.0.0",
-          announcedIp: process.env.Announce_Ip,
+          ip: process.env.Announce_Ip
         },
       ],
       enableUdp: true,
@@ -293,6 +293,7 @@ const  createWebRtcTransport = async (roomName,callback) => {
     });
   }
 };
+console.log(port)
 server.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
