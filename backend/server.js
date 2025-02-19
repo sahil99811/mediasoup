@@ -248,11 +248,12 @@ peers.on("connection", async (socket) => {
 
 const  createWebRtcTransport = async (roomName,callback) => {
   try {
+    console.log(process.env.Announce_Ip);
     const webRtcTransportOptions = {
       listenIps: [
         {
           ip: "0.0.0.0",
-          announcedIp:process.env.announcedIp || null
+          announcedIp: "127.0.0.1",
         },
       ],
       enableUdp: true,
@@ -292,6 +293,6 @@ const  createWebRtcTransport = async (roomName,callback) => {
     });
   }
 };
-server.listen(process.env.PORT || 5000, () => {
+server.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
