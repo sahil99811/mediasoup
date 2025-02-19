@@ -7,7 +7,7 @@ const { send } = require("process");
 const app = express();
 const port = 5000;
 const server = http.createServer(app);
-
+require("dotenv").config();
 app.use(
   cors({
     origin: "*",
@@ -193,6 +193,7 @@ peers.on("connection", async (socket) => {
       const {router,producers,consumersTransport}=rooms[roomName];
       let consumerTransport=consumersTransport[userId];
       let producer=producers["1"];
+      console.log(producers["1"].id);
       if (producer) {
         console.log("got consume media event 1",producer);
         if (!router.canConsume({ producerId: producer?.id, rtpCapabilities })) {
@@ -250,14 +251,15 @@ const  createWebRtcTransport = async (roomName,callback) => {
     const webRtcTransportOptions = {
       listenIps: [
         {
-          ip: "127.0.0.1",
+          ip: "0.0.0.0",
+          announcedIp:process.env.announcedIp || null
         },
       ],
       enableUdp: true,
       enableTcp: true,
       preferUdp: true,
     };
-    const router=rooms["temp"].router;
+    const router=rooms[roomName].router;
     const transport = await router.createWebRtcTransport(
       webRtcTransportOptions
     );

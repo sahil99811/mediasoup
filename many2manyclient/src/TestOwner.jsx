@@ -97,24 +97,21 @@ export default function TestOwner({ rtpCapabilities, socket, roomName, userId })
       }
     );
   };
-
+  
   console.log(params);
   return (
     <>
-        <main>
-          <video ref={remoteVideoRef} id="remotevideo" autoPlay playsInline />
-          <div
-            style={{ display: "flex", flexDirection: "column", gap: "20px" }}
-          >
-            <button onClick={createDevice}>Create Device</button>
-              <button onClick={createRecvTransport}>
-                Create recv transport
-              </button>
-              <button onClick={connectRecvTransport}>
-                Connect recv transport and consume
-              </button>
-          </div>
-        </main>
+      <main>
+        
+        <video ref={remoteVideoRef} id="remotevideo" autoPlay playsInline />
+        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+          <button onClick={createDevice}>Create Device</button>
+          <button onClick={createRecvTransport}>Create recv transport</button>
+          <button onClick={connectRecvTransport}>
+            Connect recv transport and consume
+          </button>
+        </div>
+      </main>
     </>
   );
 }
