@@ -40,8 +40,8 @@ export default function RoomJoin() {
   };
 
   useEffect(() => {
-    // const socket = io("http://13.127.83.66:5000/mediasoup");
-    const socket = io("http://localhost:5000/mediasoup");
+    const socket = io("http://13.127.83.66:5000/mediasoup");
+    // const socket = io("http://localhost:5000/mediasoup");
     setSocket(socket);
     socket.on("connection-success", ({ socketId }) => {
       console.log("connection established succesffuly");
