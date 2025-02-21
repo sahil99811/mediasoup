@@ -21,7 +21,7 @@ export default function Candidate({rtpCapabilities,socket,roomName,userId}) {
   const [producerTransport, setProducerTransport] = useState(null);
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true ,audio:true});
       if (videoRef.current) {
         const track = stream.getVideoTracks()[0];
         videoRef.current.srcObject = stream;
@@ -47,9 +47,10 @@ export default function Candidate({rtpCapabilities,socket,roomName,userId}) {
   };
 
   const createSendTransport = async () => {
+    let name="sahil patel"
     socket.emit(
       "createWebrtcTransport",
-      { sender: true, roomName, userId },
+      { sender: true, roomName, userId,name },
       ({ params }) => {
         if (params.error) {
           console.log(params.error);

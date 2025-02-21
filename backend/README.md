@@ -1,4 +1,4 @@
-TestRoom:<AssessmentId>
+room:<AssessmentId>
 roomName
 producersTransport:{}
 producers:{}
@@ -13,5 +13,26 @@ roomName
 producer
 consumer
 userId
+
+
+
+testRoom:<Roomname>
+roomName
+router
+
+<roomName>:candidate:userId
+userId
+name
+videoProducerTransport
+audioProducerTransport
+videoProducer
+audioProducer
+
+<roomName>:owner:userId
+userId
+audioConsumerTransport
+videoConsumerTransport
+audioConsumer
+videoConsumer
 
 

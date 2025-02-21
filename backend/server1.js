@@ -5,9 +5,10 @@ const cors = require("cors");
 const mediasoup = require("mediasoup");
 const { send } = require("process");
 const app = express();
-const port = 5000;
-const server = http.createServer(app);
 
+const server = http.createServer(app);
+require("dotenv").config();
+const port = process.env.PORT;
 app.use(
   cors({
     origin: "*",
@@ -22,15 +23,13 @@ const io = new Server(server, {
 });
 const peers = io.of("/mediasoup");
 let worker;
-let router;
-let producerTransport;
 let consumerTransport;
-let producer;
-let producerId;
 let consumer;
+const rooms={}
+let consumers={};
 const createWorker = async () => {
   const newWorker = await mediasoup.createWorker({
-    rtcMinPort: 2000, 
+    rtcMinPort: 2000,
     rtcMaxPort: 2020,
   });
 
@@ -49,6 +48,7 @@ const createWorker = async () => {
   worker = await createWorker();
   console.log("Mediasoup Worker created:", worker);
 })();
+
 const mediaCodecs = [
   {
     /** Indicates this is an audio codec configuration */
@@ -103,25 +103,32 @@ const mediaCodecs = [
     ],
   },
 ];
+
 peers.on("connection", async (socket) => {
   console.log(`Peer connected: ${socket.id}`);
+
   socket.emit("connection-success", { socketId: socket.id });
-  if(!router){
-    router = await worker.createRouter({ mediaCodecs });
-    console.log(`router created:${router.id}`); 
-  }
+
   socket.on("disconnect", () => {
     console.log("Peer disconnected");
   });
+
   socket.on("joinRoom", async ({ roomName }, callback) => {
     try {
       console.log(`Received request to create room: ${roomName}`);
-
-      if (!router) {
-        router = await worker.createRouter({ mediaCodecs });
-        console.log(`Router created with ID: ${router.id}`);
+      let router;
+      if(!rooms[roomName]){
+        router= await worker.createRouter({ mediaCodecs });
+        rooms[roomName]={
+          roomName:roomName,
+          router:router,
+          producersTransport:{},
+          producers:{},
+          consumersTransport:{}
+        }
       }
-
+      router=rooms[roomName].router;
+      console.log(`Router created with ID: ${router.id}`);
       // Send RTP Capabilities back to the client
       callback({ rtpCapabilities: router.rtpCapabilities });
     } catch (error) {
@@ -131,52 +138,65 @@ peers.on("connection", async (socket) => {
   });
 
   console.log("hello ji connection");
-  socket.on("getRtpCapabilities", (callback) => {
-    console.log("hello ji getRtpCapabilities");
-    const rtpCapabilities = router.rtpCapabilities;
-    callback({ rtpCapabilities });
-  });
-  socket.on("createWebrtcTransport", async ({ sender }, callback) => {
-    if (sender) {
-      producerTransport = await createWebRtcTransport(callback);
-    } else {
-      consumerTransport = await createWebRtcTransport(callback);
+  socket.on("getRtpCapabilities", ({ roomName }, callback) => {
+    const room = rooms[roomName];
+    if (!room) {
+      return callback({ error: "Room not found" });
     }
-    console.log("webrtc transport created",sender,producerTransport,consumerTransport);
+    console.log("hello ji getRtpCapabilities");
+    callback({ rtpCapabilities: room.router.rtpCapabilities });
   });
-  socket.on("transport-connect", async ({ dtlsParameters,transport }) => {
+
+  socket.on("createWebrtcTransport", async ({ sender,userId,roomName }, callback) => {
+    const room=rooms[roomName];
+    if (sender) {
+      let producerTransport = await createWebRtcTransport(roomName,callback);
+      room.producersTransport[userId]=producerTransport;
+    } else {
+      let consumerTransport = await createWebRtcTransport(roomName,callback);
+      room.consumersTransport[userId] = consumerTransport;
+    }
+    console.log("webrtc transport created");
+  });
+  socket.on("transport-connect", async ({ dtlsParameters,roomName,userId }) => {
     console.log("transport-connect");
-    await producerTransport?.connect({ dtlsParameters });
+    const room = rooms[roomName];
+    await room.producersTransport[userId]?.connect({ dtlsParameters });
   });
+
   socket.on("transport-produce", async (data, callback) => {
-    console.log(data);
-    const { kind, rtpParameters}=data;
+    const { kind, rtpParameters,userId,roomName}=data;
+    const room=rooms[roomName]
     console.log("transport produce called");
-    producer = await producerTransport?.produce({
+    let producer = await room.producersTransport[userId]?.produce({
       kind,
-      rtpParameters
+      rtpParameters,
     });
-    console.log("printing video:",kind,producer.id,producer);
-    producerId=producer.id;
-    console.log(producerId);
-    producer.on("produce", (parameters, callback) => {
+    room.producers[userId]=producer;
+    room.producers[userId].on("produce", (parameters, callback) => {
       console.log(`Producer is producing data:`, parameters);
       callback({ id: parameters.id });
     });
-    producer?.on("transportclose", () => {
+    room.producers[userId]?.on("transportclose", () => {
       console.log("Producer transport closed");
       producer?.close();
     });
 
     callback({ id: producer?.id });
   });
-  socket.on("transport-recv-connect", async ({ dtlsParameters }) => {
-    console.log(consumerTransport);
-    await consumerTransport?.connect({ dtlsParameters });
+  socket.on("transport-recv-connect", async ({ dtlsParameters,roomName ,userId}) => {
+    console.log("transport-connect");
+    const room = rooms[roomName];
+    await room.consumersTransport[userId]?.connect({ dtlsParameters });
   });
-  socket.on("consume", async ({ rtpCapabilities }, callback) => {
+  // socket.on("getUser")
+  socket.on("consume", async ({ rtpCapabilities,roomName,userId,candidateUserId }, callback) => {
     try {
-      console.log("got consume media event",producer);
+      console.log("got consume media event");
+      const {router,producers,consumersTransport}=rooms[roomName];
+      let consumerTransport=consumersTransport[userId];
+      let producer=producers["1"];
+      console.log(producers[candidateUserId]);
       if (producer) {
         console.log("got consume media event 1",producer);
         if (!router.canConsume({ producerId: producer?.id, rtpCapabilities })) {
@@ -223,24 +243,56 @@ peers.on("connection", async (socket) => {
       });
     }
   });
+  
+
   socket.on("resumePausedConsumer", async () => {
     console.log("consume-resume");
     await consumer?.resume();
   });
+  
 });
 
-const  createWebRtcTransport = async (callback) => {
+const  createWebRtcTransport = async (roomName,callback) => {
   try {
+    console.log(process.env.ANNOUNCED_IP);
     const webRtcTransportOptions = {
-      listenIps: [
+      // listenIps: [
+      //   {
+      //     ip: "0.0.0.0",
+      //     announcedIp: process.env.Announce_Ip,
+      //   },
+      // ],
+      // enableUdp: true,
+      // enableTcp: true,
+      // preferUdp: true,
+      // portRange: { min: 40000, max: 49999 },
+      listenInfos: [
         {
-          ip: "127.0.0.1",
+          protocol: "udp",
+          ip: process.env.MEDIASOUP_LISTEN_IP || "0.0.0.0",
+          announcedAddress: process.env.ANNOUNCED_IP,
+          portRange: {
+            min: process.env.MEDIASOUP_MIN_PORT || 40000,
+            max: process.env.MEDIASOUP_MAX_PORT || 49999,
+          },
+        },
+        {
+          protocol: "tcp",
+          ip: process.env.MEDIASOUP_LISTEN_IP || "0.0.0.0",
+          announcedAddress: process.env.ANNOUNCED_IP,
+          portRange: {
+            min: process.env.MEDIASOUP_MIN_PORT || 40000,
+            max: process.env.MEDIASOUP_MAX_PORT || 49999,
+          },
         },
       ],
-      enableUdp: true,
-      enableTcp: true,
-      preferUdp: true,
+      initialAvailableOutgoingBitrate: 1000000,
+      minimumAvailableOutgoingBitrate: 600000,
+      maxSctpMessageSize: 262144,
+      // Additional options that are not part of WebRtcTransportOptions.
+      maxIncomingBitrate: 1500000,
     };
+    const router=rooms[roomName].router;
     const transport = await router.createWebRtcTransport(
       webRtcTransportOptions
     );
@@ -273,6 +325,7 @@ const  createWebRtcTransport = async (callback) => {
     });
   }
 };
+console.log(port)
 server.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });

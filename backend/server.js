@@ -23,9 +23,9 @@ const io = new Server(server, {
 });
 const peers = io.of("/mediasoup");
 let worker;
-let consumerTransport;
-let consumer;
 const rooms={}
+const candidates={};
+const owners={}
 const createWorker = async () => {
   const newWorker = await mediasoup.createWorker({
     rtcMinPort: 2000,
@@ -116,17 +116,15 @@ peers.on("connection", async (socket) => {
     try {
       console.log(`Received request to create room: ${roomName}`);
       let router;
-      if(!rooms[roomName]){
+      if(!rooms[`room:${roomName}`]){
         router= await worker.createRouter({ mediaCodecs });
-        rooms[roomName]={
-          roomName:roomName,
-          router:router,
-          producersTransport:{},
-          producers:{},
-          consumersTransport:{}
-        }
+        rooms[`room:${roomName}`] = {
+          roomName: roomName,
+          router: router
+        };
       }
-      router=rooms[roomName].router;
+      router = rooms[`room:${roomName}`].router;
+      console.log(rooms);
       console.log(`Router created with ID: ${router.id}`);
       // Send RTP Capabilities back to the client
       callback({ rtpCapabilities: router.rtpCapabilities });
@@ -138,7 +136,7 @@ peers.on("connection", async (socket) => {
 
   console.log("hello ji connection");
   socket.on("getRtpCapabilities", ({ roomName }, callback) => {
-    const room = rooms[roomName];
+    const room = rooms[`room:${roomName}`];
     if (!room) {
       return callback({ error: "Room not found" });
     }
@@ -146,37 +144,45 @@ peers.on("connection", async (socket) => {
     callback({ rtpCapabilities: room.router.rtpCapabilities });
   });
 
-  socket.on("createWebrtcTransport", async ({ sender,userId,roomName }, callback) => {
-    const room=rooms[roomName];
+  socket.on("createWebrtcTransport", async ({ sender,userId,roomName,name }, callback) => {
     if (sender) {
       let producerTransport = await createWebRtcTransport(roomName,callback);
-      room.producersTransport[userId]=producerTransport;
+      candidates[`${roomName}:candidate:${userId}`]={
+        name,
+        userId,
+        videoProducerTransport:producerTransport
+      };
     } else {
       let consumerTransport = await createWebRtcTransport(roomName,callback);
-      room.consumersTransport[userId] = consumerTransport;
+      owners[`${roomName}:owner:${userId}`] = {
+        name,
+        userId,
+        videoConsumerTransport: consumerTransport
+      };;
     }
     console.log("webrtc transport created");
   });
   socket.on("transport-connect", async ({ dtlsParameters,roomName,userId }) => {
     console.log("transport-connect");
-    const room = rooms[roomName];
-    await room.producersTransport[userId]?.connect({ dtlsParameters });
+    const { videoProducerTransport } =candidates[`${roomName}:candidate:${userId}`];
+    await videoProducerTransport?.connect({ dtlsParameters });
   });
 
   socket.on("transport-produce", async (data, callback) => {
     const { kind, rtpParameters,userId,roomName}=data;
-    const room=rooms[roomName]
     console.log("transport produce called");
-    let producer = await room.producersTransport[userId]?.produce({
+    const { videoProducerTransport } =
+      candidates[`${roomName}:candidate:${userId}`];
+    let producer = await videoProducerTransport?.produce({
       kind,
       rtpParameters,
     });
-    room.producers[userId]=producer;
-    room.producers[userId].on("produce", (parameters, callback) => {
+    candidates[`${roomName}:candidate:${userId}`].videoProducer = producer;
+    producer.on("produce", (parameters, callback) => {
       console.log(`Producer is producing data:`, parameters);
       callback({ id: parameters.id });
     });
-    room.producers[userId]?.on("transportclose", () => {
+    producer?.on("transportclose", () => {
       console.log("Producer transport closed");
       producer?.close();
     });
@@ -185,36 +191,50 @@ peers.on("connection", async (socket) => {
   });
   socket.on("transport-recv-connect", async ({ dtlsParameters,roomName ,userId}) => {
     console.log("transport-connect");
-    const room = rooms[roomName];
-    await room.consumersTransport[userId]?.connect({ dtlsParameters });
+    const {videoConsumerTransport}=owners[`${roomName}:owner:${userId}`];
+    await videoConsumerTransport?.connect({ dtlsParameters });
   });
-  socket.on("consume", async ({ rtpCapabilities,roomName,userId }, callback) => {
+  socket.on("getUser",async ({roomName},callback)=>{
+    const roomCandidates = Object.keys(candidates)
+      .filter((key) => key.startsWith(`${roomName}:candidate:`))
+      .map((key) => ({
+        userId: candidates[key].userId,
+        name: candidates[key].name,
+      }));
+    console.log(roomCandidates);
+    callback({roomCandidates});
+  })
+  socket.on("consume", async ({ rtpCapabilities,roomName,userId,candidateUserId }, callback) => {
     try {
       console.log("got consume media event");
-      const {router,producers,consumersTransport}=rooms[roomName];
-      let consumerTransport=consumersTransport[userId];
-      let producer=producers["1"];
-      console.log(producers["1"].id);
-      if (producer) {
-        console.log("got consume media event 1",producer);
-        if (!router.canConsume({ producerId: producer?.id, rtpCapabilities })) {
+      const { videoProducer } =
+        candidates[`${roomName}:candidate:${candidateUserId}`];
+      const { videoConsumerTransport } =owners[`${roomName}:owner:${userId}`];
+      console.log(videoProducer, videoConsumerTransport);  
+      const { router } = rooms[`room:${roomName}`]; 
+      if (videoProducer) {
+        console.log("got consume media event 1", videoProducer);
+        if (
+          !router.canConsume({ producerId: videoProducer?.id, rtpCapabilities })
+        ) {
           console.error("Cannot consume");
           return;
         }
-          console.log(
-            "Producer is active:",
-            producer.id,
-            producer.closed === false
-          );
         console.log(
-          router.canConsume({ producerId: producer.id, rtpCapabilities })
+          "Producer is active:",
+          videoProducer.id,
+          videoProducer.closed === false
+        );
+        console.log(
+          router.canConsume({ producerId: videoProducer.id, rtpCapabilities })
         );
         console.log("-------> consume");
-        consumer = await consumerTransport?.consume({
-          producerId: producer.id,
+        let consumer = await videoConsumerTransport?.consume({
+          producerId: videoProducer?.id,
           rtpCapabilities,
-          paused: producer?.kind === "video",
+          paused: videoProducer?.kind === "video",
         });
+        owners[`${roomName}:owner:${userId}`].videoConsumer=consumer;
         consumer?.on("transportclose", () => {
           console.log("Consumer transport closed");
           consumer?.close();
@@ -223,9 +243,10 @@ peers.on("connection", async (socket) => {
           console.log("Producer closed");
           consumer?.close();
         });
+
         callback({
           params: {
-            producerId: producer?.id,
+            producerId: videoProducer?.id,
             id: consumer?.id,
             kind: consumer?.kind,
             rtpParameters: consumer?.rtpParameters,
@@ -241,28 +262,57 @@ peers.on("connection", async (socket) => {
       });
     }
   });
-  socket.on("resumePausedConsumer", async () => {
+  
+
+  socket.on("resumePausedConsumer", async ({ roomName, userId }) => {
+    const { videoConsumer } = owners[`${roomName}:owner:${userId}`];
     console.log("consume-resume");
-    await consumer?.resume();
+    await videoConsumer?.resume();
   });
+  
 });
 
 const  createWebRtcTransport = async (roomName,callback) => {
   try {
-    console.log(process.env.Announce_Ip);
+    console.log(process.env.ANNOUNCED_IP);
     const webRtcTransportOptions = {
-      listenIps: [
+      // listenIps: [
+      //   {
+      //     ip: "0.0.0.0",
+      //     announcedIp: process.env.Announce_Ip,
+      //   },
+      // ],
+      // enableUdp: true,
+      // enableTcp: true,
+      // preferUdp: true,
+      // portRange: { min: 40000, max: 49999 },
+      listenInfos: [
         {
-          ip: "0.0.0.0",
-          announcedIp: process.env.Announce_Ip,
+          protocol: "udp",
+          ip: process.env.MEDIASOUP_LISTEN_IP || "0.0.0.0",
+          announcedAddress: process.env.ANNOUNCED_IP,
+          portRange: {
+            min: process.env.MEDIASOUP_MIN_PORT || 40000,
+            max: process.env.MEDIASOUP_MAX_PORT || 49999,
+          },
+        },
+        {
+          protocol: "tcp",
+          ip: process.env.MEDIASOUP_LISTEN_IP || "0.0.0.0",
+          announcedAddress: process.env.ANNOUNCED_IP,
+          portRange: {
+            min: process.env.MEDIASOUP_MIN_PORT || 40000,
+            max: process.env.MEDIASOUP_MAX_PORT || 49999,
+          },
         },
       ],
-      enableUdp: true,
-      enableTcp: true,
-      preferUdp: true,
-      portRange: { min: 40000, max: 49999 },
+      initialAvailableOutgoingBitrate: 1000000,
+      minimumAvailableOutgoingBitrate: 600000,
+      maxSctpMessageSize: 262144,
+      // Additional options that are not part of WebRtcTransportOptions.
+      maxIncomingBitrate: 1500000,
     };
-    const router=rooms[roomName].router;
+    const router=rooms[`room:${roomName}`].router;
     const transport = await router.createWebRtcTransport(
       webRtcTransportOptions
     );

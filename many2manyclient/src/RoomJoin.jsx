@@ -10,6 +10,7 @@ export default function RoomJoin() {
   const [userId, setUserId] = useState("");
   const [joined,setJoined]=useState(false);
   const [rtpCapabilities, setRtpCapabilities] = useState(null);
+  const [roomCandidates, setRoomCandidates] = useState([]);
   const handleJoinRoom = () => {
     console.log(roomName, userId);
     if (!roomName.trim() || !userId.trim()) {
@@ -24,14 +25,22 @@ export default function RoomJoin() {
       }
       console.log("printing rtp capibilities", response.rtpCapabilities);
       setRtpCapabilities(response.rtpCapabilities);
-      setJoined(true);
+     
       // createDevice(response.rtpCapabilities);
     });
-
+     if(role === "testOwner"){
+          socket.emit("getUser", { roomName }, async ({ roomCandidates }) => {
+            setRoomCandidates(roomCandidates || []);
+             setJoined(true);
+          });
+     }else {
+       setJoined(true);
+     }
     console.log(`Joining room: ${roomName} as ${role}`);
   };
 
   useEffect(() => {
+    // const socket = io("http://13.127.83.66:5000/mediasoup");
     const socket = io("http://localhost:5000/mediasoup");
     setSocket(socket);
     socket.on("connection-success", ({ socketId }) => {
@@ -140,8 +149,7 @@ export default function RoomJoin() {
                   flex: "1",
                   padding: "8px",
                   borderRadius: "8px",
-                  backgroundColor:
-                    role === "testOwner" ? "#3b82f6" : "#d1d5db",
+                  backgroundColor: role === "testOwner" ? "#3b82f6" : "#d1d5db",
                   color: role === "test_owner" ? "white" : "black",
                   border: "none",
                   cursor: "pointer",
@@ -188,6 +196,7 @@ export default function RoomJoin() {
               roomName={roomName}
               userId={userId}
               socket={socket}
+              roomCandidates={roomCandidates}
             />
           )}
         </div>
