@@ -1,133 +1,152 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
-import { io } from "socket.io-client";
 import { Device } from "mediasoup-client";
 
-export default function Candidate({rtpCapabilities,socket,roomName,userId}) {
-    console.log(rtpCapabilities, socket, roomName, userId);
+export default function Candidate({
+  rtpCapabilities,
+  socket,
+  roomName,
+  userId,
+  name
+}) {
   const videoRef = useRef(null);
-  const [params, setParams] = useState({
+  const [device, setDevice] = useState(null);
+  const [producerTransport, setProducerTransport] = useState(null);
+  const [streaming, setStreaming] = useState(false);
+
+  const params = {
     encoding: [
       { rid: "r0", maxBitrate: 100000, scalabilityMode: "S1T3" },
       { rid: "r1", maxBitrate: 300000, scalabilityMode: "S1T3" },
       { rid: "r2", maxBitrate: 900000, scalabilityMode: "S1T3" },
     ],
     codecOptions: { videoGoogleStartBitrate: 1000 },
-  });
+  };
 
-  const [device, setDevice] = useState(null);
-
-  const [producerTransport, setProducerTransport] = useState(null);
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true ,audio:true});
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
       if (videoRef.current) {
-        const track = stream.getVideoTracks()[0];
         videoRef.current.srcObject = stream;
-        setParams((current) => ({ ...current, track }));
       }
-      console.log(videoRef.current);
+      return stream.getVideoTracks()[0];
     } catch (error) {
       console.error("Error accessing camera:", error);
     }
   };
+
   const createDevice = async () => {
     try {
       const newDevice = new Device();
       await newDevice.load({ routerRtpCapabilities: rtpCapabilities });
       setDevice(newDevice);
-      console.log("device created");
+      return newDevice;
     } catch (error) {
-      console.log(error);
-      if (error.name === "UnsupportedError") {
-        console.error("Browser not supported");
-      }
+      console.error(error);
+      return null;
     }
   };
 
-  const createSendTransport = async () => {
-    let name="sahil patel"
-    socket.emit(
-      "createWebrtcTransport",
-      { sender: true, roomName, userId,name },
-      ({ params }) => {
-        if (params.error) {
-          console.log(params.error);
-          return;
-        }
-
-        let transport = device.createSendTransport(params);
-        setProducerTransport(transport);
-
-        transport.on(
-          "connect",
-          async ({ dtlsParameters }, callback, errback) => {
-            try {
-              console.log("----------> producer transport has connected");
-              socket.emit("transport-connect", {
-                dtlsParameters,
-                userId,
-                roomName,
-              });
-              callback();
-            } catch (error) {
-              errback(error);
-            }
+  const createSendTransport = async (newDevice) => {
+    return new Promise((resolve, reject) => {
+      socket.emit(
+        "createWebrtcTransport",
+        { sender: true, roomName, userId,name },
+        ({ params }) => {
+          if (params?.error) {
+            console.log(params.error);
+            reject(params.error);
+            return;
           }
-        );
 
-        transport.on("produce", async (parameters, callback, errback) => {
-          const { kind, rtpParameters } = parameters;
+          const transport = newDevice.createSendTransport(params);
+          setProducerTransport(transport);
 
-          console.log("----------> transport-produce");
-
-          try {
-            socket.emit(
-              "transport-produce",
-              { kind, rtpParameters, userId, roomName },
-              ({ id }) => {
-                callback({ id });
+          transport.on(
+            "connect",
+            async ({ dtlsParameters }, callback, errback) => {
+              try {
+                socket.emit("transport-connect", {
+                  dtlsParameters,
+                  userId,
+                  roomName,
+                });
+                callback();
+              } catch (error) {
+                errback(error);
               }
-            );
-          } catch (error) {
-            errback(error);
-          }
-        });
-      }
-    );
+            }
+          );
+
+          transport.on(
+            "produce",
+            async ({ kind, rtpParameters }, callback, errback) => {
+              try {
+                socket.emit(
+                  "transport-produce",
+                  { kind, rtpParameters, userId, roomName },
+                  ({ id }) => {
+                    callback({ id });
+                  }
+                );
+              } catch (error) {
+                errback(error);
+              }
+            }
+          );
+
+          resolve(transport);
+        }
+      );
+    });
   };
 
-  const connectSendTransport = async () => {
-    let localProducer = await producerTransport.produce(params);
+  const connectSendTransport = async (transport, track) => {
+    try {
+      let producer = await transport.produce({ track, ...params });
 
-    localProducer.on("trackended", () => {
-      console.log("trackended");
-    });
-    localProducer.on("transportclose", () => {
-      console.log("transportclose");
-    });
-  }
+      producer.on("trackended", () => console.log("Track ended"));
+      producer.on("transportclose", () => console.log("Transport closed"));
 
-  console.log(params);
-  useEffect(()=>{
-      startCamera()
-  },[])
+      return producer;
+    } catch (error) {
+      console.error("Error producing stream:", error);
+    }
+  };
+
+  const startRecording = () => {
+    socket.emit("start-recording", { roomName, userId }, () => {
+      console.log("Recording started");
+    });
+  };
+
+  const startStreaming = async () => {
+    if (streaming) return;
+
+    const track = await startCamera();
+    if (!track) return;
+
+    const newDevice = await createDevice();
+    if (!newDevice) return;
+
+    const transport = await createSendTransport(newDevice);
+    if (!transport) return;
+
+    await connectSendTransport(transport, track);
+    setStreaming(true);
+  };
+
   return (
-        <main>
-       
-          <video ref={videoRef} id="localvideo" autoPlay playsInline />
-          <div
-            style={{ display: "flex", flexDirection: "column", gap: "20px" }}
-          >
-            <button onClick={createDevice}>Create Device</button>
-            <button onClick={createSendTransport}>
-                Create send transport
-            </button>
-            <button onClick={connectSendTransport}>
-                Connect send transport and produce
-            </button>
-          </div>
-        </main>
+    <main>
+      <video ref={videoRef} id="localvideo" autoPlay playsInline />
+      <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+        <button onClick={startStreaming} disabled={streaming}>
+          {streaming ? "Streaming..." : "Start Streaming"}
+        </button>
+        <button onClick={startRecording}>Start Recording</button>
+      </div>
+    </main>
   );
 }

@@ -11,9 +11,10 @@ export default function RoomJoin() {
   const [joined,setJoined]=useState(false);
   const [rtpCapabilities, setRtpCapabilities] = useState(null);
   const [roomCandidates, setRoomCandidates] = useState([]);
+  const [name,setName]=useState("")
   const handleJoinRoom = () => {
     console.log(roomName, userId);
-    if (!roomName.trim() || !userId.trim()) {
+    if (!roomName.trim() || !userId.trim() || !name) {
       alert("Please enter all fields!");
       return;
     }
@@ -40,8 +41,8 @@ export default function RoomJoin() {
   };
 
   useEffect(() => {
-    const socket = io("http://13.127.83.66:5000/mediasoup");
-    // const socket = io("http://localhost:5000/mediasoup");
+    // const socket = io("http://13.127.83.66:5000/mediasoup");
+    const socket = io("http://localhost:5000/mediasoup");
     setSocket(socket);
     socket.on("connection-success", ({ socketId }) => {
       console.log("connection established succesffuly");
@@ -107,6 +108,21 @@ export default function RoomJoin() {
               placeholder="Enter UserId"
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "8px",
+                border: "1px solid #d1d5db",
+                borderRadius: "8px",
+                marginBottom: "16px",
+                outline: "none",
+                fontSize: "16px",
+              }}
+            />
+            <input
+              type="text"
+              placeholder="Enter Name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               style={{
                 width: "100%",
                 padding: "8px",
@@ -189,6 +205,7 @@ export default function RoomJoin() {
               roomName={roomName}
               userId={userId}
               socket={socket}
+              name={name}
             />
           ) : (
             <TestOwner
@@ -197,6 +214,7 @@ export default function RoomJoin() {
               userId={userId}
               socket={socket}
               roomCandidates={roomCandidates}
+              name={name}
             />
           )}
         </div>

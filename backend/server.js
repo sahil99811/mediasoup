@@ -4,8 +4,11 @@ const { Server } = require("socket.io");
 const cors = require("cors");
 const mediasoup = require("mediasoup");
 const { send } = require("process");
+const FFmpegStatic = require("ffmpeg-static");
 const app = express();
-
+const { spawn } = require("child_process");
+const FFmpeg = require("./services/ffmpegService1");
+const { sendResultMessage1 } = require("./kafka/producer");
 const server = http.createServer(app);
 require("dotenv").config();
 const port = process.env.PORT;
@@ -23,9 +26,23 @@ const io = new Server(server, {
 });
 const peers = io.of("/mediasoup");
 let worker;
-const rooms={}
-const candidates={};
-const owners={}
+const rooms = {};
+const candidates = {};
+const owners = {};
+let rtpTransport;
+let rtpConsumer;
+let recordInfo = {};
+let ffmpegObject = {};
+const recording = {
+  ip: "127.0.0.1",
+  audioPort: 5004,
+  audioPortRtcp: 5005,
+  videoPort: 5006,
+  videoPortRtcp: 5007,
+};
+const plainTransport = {
+  listenIp: { ip: "127.0.0.1", announcedIp: null },
+};
 const createWorker = async () => {
   const newWorker = await mediasoup.createWorker({
     rtcMinPort: 2000,
@@ -116,11 +133,11 @@ peers.on("connection", async (socket) => {
     try {
       console.log(`Received request to create room: ${roomName}`);
       let router;
-      if(!rooms[`room:${roomName}`]){
-        router= await worker.createRouter({ mediaCodecs });
+      if (!rooms[`room:${roomName}`]) {
+        router = await worker.createRouter({ mediaCodecs });
         rooms[`room:${roomName}`] = {
           roomName: roomName,
-          router: router
+          router: router,
         };
       }
       router = rooms[`room:${roomName}`].router;
@@ -144,32 +161,39 @@ peers.on("connection", async (socket) => {
     callback({ rtpCapabilities: room.router.rtpCapabilities });
   });
 
-  socket.on("createWebrtcTransport", async ({ sender,userId,roomName,name }, callback) => {
-    if (sender) {
-      let producerTransport = await createWebRtcTransport(roomName,callback);
-      candidates[`${roomName}:candidate:${userId}`]={
-        name,
-        userId,
-        videoProducerTransport:producerTransport
-      };
-    } else {
-      let consumerTransport = await createWebRtcTransport(roomName,callback);
-      owners[`${roomName}:owner:${userId}`] = {
-        name,
-        userId,
-        videoConsumerTransport: consumerTransport
-      };;
+  socket.on(
+    "createWebrtcTransport",
+    async ({ sender, userId, roomName, name }, callback) => {
+      if (sender) {
+        let producerTransport = await createWebRtcTransport(roomName, callback);
+        candidates[`${roomName}:candidate:${userId}`] = {
+          name,
+          userId,
+          videoProducerTransport: producerTransport,
+        };
+      } else {
+        let consumerTransport = await createWebRtcTransport(roomName, callback);
+        owners[`${roomName}:owner:${userId}`] = {
+          name,
+          userId,
+          videoConsumerTransport: consumerTransport,
+        };
+      }
+      console.log("webrtc transport created");
     }
-    console.log("webrtc transport created");
-  });
-  socket.on("transport-connect", async ({ dtlsParameters,roomName,userId }) => {
-    console.log("transport-connect");
-    const { videoProducerTransport } =candidates[`${roomName}:candidate:${userId}`];
-    await videoProducerTransport?.connect({ dtlsParameters });
-  });
+  );
+  socket.on(
+    "transport-connect",
+    async ({ dtlsParameters, roomName, userId }) => {
+      console.log("transport-connect");
+      const { videoProducerTransport } =
+        candidates[`${roomName}:candidate:${userId}`];
+      await videoProducerTransport?.connect({ dtlsParameters });
+    }
+  );
 
   socket.on("transport-produce", async (data, callback) => {
-    const { kind, rtpParameters,userId,roomName}=data;
+    const { kind, rtpParameters, userId, roomName } = data;
     console.log("transport produce called");
     const { videoProducerTransport } =
       candidates[`${roomName}:candidate:${userId}`];
@@ -189,12 +213,15 @@ peers.on("connection", async (socket) => {
 
     callback({ id: producer?.id });
   });
-  socket.on("transport-recv-connect", async ({ dtlsParameters,roomName ,userId}) => {
-    console.log("transport-connect");
-    const {videoConsumerTransport}=owners[`${roomName}:owner:${userId}`];
-    await videoConsumerTransport?.connect({ dtlsParameters });
-  });
-  socket.on("getUser",async ({roomName},callback)=>{
+  socket.on(
+    "transport-recv-connect",
+    async ({ dtlsParameters, roomName, userId }) => {
+      console.log("transport-connect");
+      const { videoConsumerTransport } = owners[`${roomName}:owner:${userId}`];
+      await videoConsumerTransport?.connect({ dtlsParameters });
+    }
+  );
+  socket.on("getUser", async ({ roomName }, callback) => {
     const roomCandidates = Object.keys(candidates)
       .filter((key) => key.startsWith(`${roomName}:candidate:`))
       .map((key) => ({
@@ -202,77 +229,144 @@ peers.on("connection", async (socket) => {
         name: candidates[key].name,
       }));
     console.log(roomCandidates);
-    callback({roomCandidates});
-  })
-  socket.on("consume", async ({ rtpCapabilities,roomName,userId,candidateUserId }, callback) => {
-    try {
-      console.log("got consume media event");
-      const { videoProducer } =
-        candidates[`${roomName}:candidate:${candidateUserId}`];
-      const { videoConsumerTransport } =owners[`${roomName}:owner:${userId}`];
-      console.log(videoProducer, videoConsumerTransport);  
-      const { router } = rooms[`room:${roomName}`]; 
-      if (videoProducer) {
-        console.log("got consume media event 1", videoProducer);
-        if (
-          !router.canConsume({ producerId: videoProducer?.id, rtpCapabilities })
-        ) {
-          console.error("Cannot consume");
-          return;
-        }
-        console.log(
-          "Producer is active:",
-          videoProducer.id,
-          videoProducer.closed === false
-        );
-        console.log(
-          router.canConsume({ producerId: videoProducer.id, rtpCapabilities })
-        );
-        console.log("-------> consume");
-        let consumer = await videoConsumerTransport?.consume({
-          producerId: videoProducer?.id,
-          rtpCapabilities,
-          paused: videoProducer?.kind === "video",
-        });
-        owners[`${roomName}:owner:${userId}`].videoConsumer=consumer;
-        consumer?.on("transportclose", () => {
-          console.log("Consumer transport closed");
-          consumer?.close();
-        });
-        consumer?.on("producerclose", () => {
-          console.log("Producer closed");
-          consumer?.close();
-        });
+    callback({ roomCandidates });
+  });
+  socket.on("start-recording", async ({ roomName, userId }, callback) => {
+    const { router } = rooms[`room:${roomName}`];
+    const { videoProducer } = candidates[`${roomName}:candidate:${userId}`];
+    rtpTransport = await router.createPlainTransport({
+      comedia: false,
+      rtcpMux: true,
+      ...plainTransport,
+    });
+    await rtpTransport.connect({
+      ip: recording.ip,
+      port: recording.videoPort,
+    });
+    console.log(
+      "mediasoup Video RTP SEND transport connected: %s:%d <--> %s:%d (%s)",
+      rtpTransport.tuple.localIp,
+      rtpTransport.tuple.localPort,
+      rtpTransport.tuple.remoteIp,
+      rtpTransport.tuple.remotePort,
+      rtpTransport.tuple.protocol
+    );
+    rtpConsumer = await rtpTransport.consume({
+      producerId: videoProducer.id,
+      rtpCapabilities: router.rtpCapabilities,
+      paused: true,
+    });
+    recordInfo["video"] = {
+      remoteRtpPort: recording.videoPort,
+      remoteRtcpPort: recording.videoPortRtcp,
+      localRtcpPort: rtpTransport.rtcpTuple
+        ? rtpTransport.rtcpTuple.localPort
+        : undefined,
+      rtpCapabilities: router.rtpCapabilities,
+      rtpParameters: rtpConsumer.rtpParameters,
+    };
+    recordInfo.fileName = Date.now().toString();
+    console.log(recordInfo);
+    ffmpegObject = getProcess(recordInfo);
+    ffmpegObject._observer.on("chunk-complete", (fileName) => {
+      console.log(`Chunk finished writing: ${fileName}`);
+    });
 
+    setTimeout(async () => {
+      rtpConsumer.resume();
+      rtpConsumer.requestKeyFrame();
+    }, 1000);
+    // setTimeout(async ()=>{
+    //   console.log("printing:",ffmpegObject)
+    //   ffmpegObject.kill();
+    // },5000)
+    callback();
+  });
+  socket.on("stop-recording", async (callback) => {
+    console.log(ffmpegObject);
+    ffmpegObject.kill();
+  });
+  const getProcess = () => {
+    return new FFmpeg(recordInfo);
+  };
+
+  socket.on(
+    "consume",
+    async (
+      { rtpCapabilities, roomName, userId, candidateUserId },
+      callback
+    ) => {
+      try {
+        console.log("got consume media event");
+        const { videoProducer } =
+          candidates[`${roomName}:candidate:${candidateUserId}`];
+        const { videoConsumerTransport } =
+          owners[`${roomName}:owner:${userId}`];
+        console.log(videoProducer, videoConsumerTransport);
+        const { router } = rooms[`room:${roomName}`];
+        if (videoProducer) {
+          console.log("got consume media event 1", videoProducer);
+          if (
+            !router.canConsume({
+              producerId: videoProducer?.id,
+              rtpCapabilities,
+            })
+          ) {
+            console.error("Cannot consume");
+            return;
+          }
+          console.log(
+            "Producer is active:",
+            videoProducer.id,
+            videoProducer.closed === false
+          );
+          console.log(
+            router.canConsume({ producerId: videoProducer.id, rtpCapabilities })
+          );
+          console.log("-------> consume");
+          let consumer = await videoConsumerTransport?.consume({
+            producerId: videoProducer?.id,
+            rtpCapabilities,
+            paused: videoProducer?.kind === "video",
+          });
+          owners[`${roomName}:owner:${userId}`].videoConsumer = consumer;
+          consumer?.on("transportclose", () => {
+            console.log("Consumer transport closed");
+            consumer?.close();
+          });
+          consumer?.on("producerclose", () => {
+            console.log("Producer closed");
+            consumer?.close();
+          });
+
+          callback({
+            params: {
+              producerId: videoProducer?.id,
+              id: consumer?.id,
+              kind: consumer?.kind,
+              rtpParameters: consumer?.rtpParameters,
+            },
+          });
+        }
+      } catch (error) {
+        console.error("Error consuming:", error);
         callback({
           params: {
-            producerId: videoProducer?.id,
-            id: consumer?.id,
-            kind: consumer?.kind,
-            rtpParameters: consumer?.rtpParameters,
+            error,
           },
         });
       }
-    } catch (error) {
-      console.error("Error consuming:", error);
-      callback({
-        params: {
-          error,
-        },
-      });
     }
-  });
-  
+  );
 
   socket.on("resumePausedConsumer", async ({ roomName, userId }) => {
     const { videoConsumer } = owners[`${roomName}:owner:${userId}`];
     console.log("consume-resume");
     await videoConsumer?.resume();
   });
-  
 });
 
-const  createWebRtcTransport = async (roomName,callback) => {
+const createWebRtcTransport = async (roomName, callback) => {
   try {
     console.log(process.env.ANNOUNCED_IP);
     const webRtcTransportOptions = {
@@ -312,7 +406,7 @@ const  createWebRtcTransport = async (roomName,callback) => {
       // Additional options that are not part of WebRtcTransportOptions.
       maxIncomingBitrate: 1500000,
     };
-    const router=rooms[`room:${roomName}`].router;
+    const router = rooms[`room:${roomName}`].router;
     const transport = await router.createWebRtcTransport(
       webRtcTransportOptions
     );
@@ -345,7 +439,7 @@ const  createWebRtcTransport = async (roomName,callback) => {
     });
   }
 };
-console.log(port)
+console.log(port);
 server.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
