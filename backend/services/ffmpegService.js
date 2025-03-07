@@ -103,6 +103,3 @@ module.exports = class FFmpeg {
     return ["-map", "0:v:0", "-c:v", "copy"];
   }
 };
-
-
-

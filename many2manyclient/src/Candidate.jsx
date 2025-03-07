@@ -14,13 +14,29 @@ export default function Candidate({
   const [streaming, setStreaming] = useState(false);
 
   const params = {
-    encoding: [
-      { rid: "r0", maxBitrate: 100000, scalabilityMode: "S1T3" },
-      { rid: "r1", maxBitrate: 300000, scalabilityMode: "S1T3" },
-      { rid: "r2", maxBitrate: 900000, scalabilityMode: "S1T3" },
+    encodings: [
+      {
+        rid: "r0",
+        maxBitrate: 100000,
+        scalabilityMode: "S1T3",
+        scaleResolutionDownBy: 4,
+      },
+      {
+        rid: "r1",
+        maxBitrate: 300000,
+        scalabilityMode: "S1T3",
+        scaleResolutionDownBy: 2,
+      },
+      {
+        rid: "r2",
+        maxBitrate: 900000,
+        scalabilityMode: "S1T3",
+        scaleResolutionDownBy: 1,
+      },
     ],
     codecOptions: { videoGoogleStartBitrate: 1000 },
   };
+
 
   const startCamera = async () => {
     try {

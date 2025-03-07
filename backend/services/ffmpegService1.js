@@ -1,84 +1,92 @@
 const { spawn } = require("child_process");
 const { EventEmitter } = require("events");
-
 const { createSdpText } = require("../utils/sdp");
 const { convertStringToStream } = require("../utils/helper");
 const FFmpegStatic = require("ffmpeg-static");
-const cmdProgram = FFmpegStatic;
-const RECORD_FILE_LOCATION_PATH =
-  process.env.RECORD_FILE_LOCATION_PATH || "./files";
-
-module.exports = class FFmpeg {
+const sharp = require("sharp");
+async function bufferToSharpImage(buffer) {
+  const image = sharp(buffer);
+  const metadata = await image.metadata();
+  console.log("Image metadata:", metadata);
+  return image;
+}
+class FFmpeg {
   constructor(rtpParameters) {
-    console.log(rtpParameters);
     this._rtpParameters = rtpParameters;
-    this._process = undefined;
+    this._process = null;
     this._observer = new EventEmitter();
-    this._createProcess();
+    this._initProcess();
   }
 
-  _createProcess() {
+  _initProcess() {
     const sdpString = createSdpText(this._rtpParameters);
     const sdpStream = convertStringToStream(sdpString);
 
-    console.log("createProcess() [sdpString:%s]", sdpString);
+    console.log("Starting FFmpeg with SDP:\n", sdpString);
 
-    this._process = spawn(cmdProgram, this._commandArgs);
+    this._process = spawn(FFmpegStatic, this._commandArgs);
 
-    if (this._process.stderr) {
-      this._process.stderr.setEncoding("utf-8");
+    this._process.stderr?.setEncoding("utf-8");
+    this._process.stderr?.on("data", this._handleFFmpegLogs.bind(this));
 
-      this._process.stderr.on("data", (data) => {
-        // console.log("ffmpeg::process::stderr [data:%s]", data);
+    this._process.stdout?.on("data", async (frame) => {
+      // Check if the buffer starts with PNG signature
+      if (
+        frame.length > 8 &&
+        frame[0] === 0x89 &&
+        frame[1] === 0x50 &&
+        frame[2] === 0x4e &&
+        frame[3] === 0x47
+      ) {
+        console.log("Valid PNG frame received");
+        await bufferToSharpImage(frame)
+          .then((img) =>
+            img.toFile(`${Date.now()}.png`)
+          )
+          .catch((err) => console.error("Sharp processing error:", err));
+        this._observer.emit("frame", frame);
+      } else {
+        console.warn("Skipping non-PNG frame...");
+      }
+    });
 
-        // Detect segment completion (FFmpeg logs segment filenames)
-        const segmentMatch = data.match(
-          /Opening '(.+?chunk_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.webm)' for writing/
-        );
-        if (segmentMatch) {
-          console.log(`New chunk created: ${segmentMatch[1]}`);
-          this._observer.emit("chunk-complete", segmentMatch[1]);
-        }
-      });
-    }
 
-    if (this._process.stdout) {
-      this._process.stdout.setEncoding("utf-8");
+    this._process.on("error", (error) => {
+      console.error("FFmpeg process error:", error);
+      this._observer.emit("error", error);
+    });
 
-      this._process.stdout.on("data", (data) =>
-        console.log("ffmpeg::process::stdout [data:%s]", data)
-      );
-    }
-
-    this._process.on("message", (message) =>
-      console.log("ffmpeg::process::message [message:%o]", message)
-    );
-
-    this._process.on("error", (error) =>
-      console.error("ffmpeg::process::error [error:%o]", error)
-    );
-
-    this._process.once("close", () => {
-      console.log("ffmpeg::process::close");
+    this._process.once("close", (code, signal) => {
+      console.log(`FFmpeg process exited with code ${code}, signal ${signal}`);
       this._observer.emit("process-close");
     });
 
-    sdpStream.on("error", (error) =>
-      console.error("sdpStream::error [error:%o]", error)
-    );
+    sdpStream.on("error", (error) => console.error("SDP stream error:", error));
 
-    // Pipe SDP stream to the ffmpeg process
-    sdpStream.resume();
+    // Pipe SDP to FFmpeg
     sdpStream.pipe(this._process.stdin);
   }
 
+  _handleFFmpegLogs(data) {
+    const segmentMatch = data.match(
+      /Opening '(.+?chunk_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.webm)' for writing/
+    );
+    if (segmentMatch) {
+      console.log(`New chunk created: ${segmentMatch[1]}`);
+      this._observer.emit("chunk-complete", segmentMatch[1]);
+    }
+  }
+
   kill() {
-    console.log("kill() [pid:%d]", this._process.pid);
-    this._process.kill("SIGINT");
+    if (this._process) {
+      console.log("Terminating FFmpeg process...");
+      this._process.kill("SIGINT");
+      this._process = null;
+    }
   }
 
   get _commandArgs() {
-    let commandArgs = [
+    return [
       "-loglevel",
       "debug",
       "-protocol_whitelist",
@@ -89,13 +97,8 @@ module.exports = class FFmpeg {
       "sdp",
       "-i",
       "pipe:0",
+      ...this._videoArgs,
     ];
-
-    commandArgs = commandArgs.concat(this._videoArgs);
-
-    console.log("commandArgs:%o", commandArgs);
-
-    return commandArgs;
   }
 
   get _videoArgs() {
@@ -103,22 +106,14 @@ module.exports = class FFmpeg {
       "-map",
       "0:v:0",
       "-c:v",
-      "libvpx", // Re-encode video using VP8 codec
-      "-b:v",
-      "1M", // Bitrate (adjust as needed)
-      "-g",
-      "60", // Force keyframe every 60 frames (~2 sec at 30 FPS)
-      "-force_key_frames",
-      "expr:gte(t,n*15)", // Force keyframe every 30 seconds
+      "png",
+      "-vf",
+      "fps=1",
       "-f",
-      "segment", // Enable segmentation
-      "-segment_time",
-      "15", // 30-second chunks
-      "-reset_timestamps",
-      "1", // Reset timestamps for each segment
-      "-strftime",
-      "1", // Unique filenames using timestamp
-      `${RECORD_FILE_LOCATION_PATH}/chunk_%Y-%m-%d_%H-%M-%S.webm`, // Output naming pattern
+      "image2pipe",
+      "pipe:1",
     ];
   }
-};
+}
+
+module.exports = FFmpeg;

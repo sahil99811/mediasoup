@@ -1,24 +1,48 @@
-// Port used for the gstreamer process to receive RTP from mediasoup
-
 const MIN_PORT = 20000;
 const MAX_PORT = 30000;
-const TIMEOUT = 400;
 
 const takenPortSet = new Set();
 
-module.exports.getPort = async () => {
-  let port = getRandomPort();
+/**
+ * Generates a random port within the defined range.
+ * @returns {number} A random port number.
+ */
+const getRandomPort = () =>
+  Math.floor(Math.random() * (MAX_PORT - MIN_PORT + 1) + MIN_PORT);
 
-  while (takenPortSet.has(port)) {
+/**
+ * Allocates an available port that is not already taken.
+ * @returns {number} An available port number.
+ */
+const allocatePort = () => {
+  let port;
+  do {
     port = getRandomPort();
-  }
+  } while (takenPortSet.has(port));
 
   takenPortSet.add(port);
-
   return port;
 };
 
-module.exports.releasePort = (port) => takenPortSet.delete(port);
+/**
+ * Retrieves a pair of available RTP and RTCP ports.
+ * @returns {{rtpPort: number, rtcpPort: number}} An object containing allocated ports.
+ */
+const getPort = async () => {
+  const rtpPort = allocatePort();
+  const rtcpPort = allocatePort();
+   console.log(rtpPort,rtcpPort)
+  return { rtpPort, rtcpPort };
+};
 
-const getRandomPort = () =>
-  Math.floor(Math.random() * (MAX_PORT - MIN_PORT + 1) + MIN_PORT);
+/**
+ * Releases the allocated RTP and RTCP ports.
+ * @param {number} rtpPort - The RTP port to be released.
+ * @param {number} rtcpPort - The RTCP port to be released.
+ */
+const releasePort = (rtpPort, rtcpPort) => {
+  takenPortSet.delete(rtpPort);
+  takenPortSet.delete(rtcpPort);
+};
+
+module.exports = { getPort, releasePort };

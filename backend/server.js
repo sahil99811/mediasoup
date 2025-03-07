@@ -3,12 +3,12 @@ const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 const mediasoup = require("mediasoup");
-const { send } = require("process");
-const FFmpegStatic = require("ffmpeg-static");
+
 const app = express();
-const { spawn } = require("child_process");
 const FFmpeg = require("./services/ffmpegService1");
 const { sendResultMessage1 } = require("./kafka/producer");
+const GStreamer = require("./services/gstreamer1");
+const { getPort } = require("./services/port");
 const server = http.createServer(app);
 require("dotenv").config();
 const port = process.env.PORT;
@@ -45,6 +45,8 @@ const plainTransport = {
 };
 const createWorker = async () => {
   const newWorker = await mediasoup.createWorker({
+    logLevel: "debug",
+    logTags: ["rtp", "srtp", "rtcp"],
     rtcMinPort: 2000,
     rtcMaxPort: 2020,
   });
@@ -67,56 +69,38 @@ const createWorker = async () => {
 
 const mediaCodecs = [
   {
-    /** Indicates this is an audio codec configuration */
     kind: "audio",
-    /**
-     * Specifies the MIME type for the Opus codec, known for good audio quality at various bit rates.
-     * Format: <type>/<subtype>, e.g., audio/opus
-     */
     mimeType: "audio/opus",
-    /**
-     * Specifies the number of audio samples processed per second (48,000 samples per second for high-quality audio).
-     * Higher values generally allow better audio quality.
-     */
     clockRate: 48000,
-    /** Specifies the number of audio channels (2 for stereo audio). */
     channels: 2,
-    /**
-     * Optional: Specifies a preferred payload type number for the codec.
-     * Helps ensure consistency in payload type numbering across different sessions or applications.
-     */
-    preferredPayloadType: 96, // Example value
-    /**
-     * Optional: Specifies a list of RTCP feedback mechanisms supported by the codec.
-     * Helps optimize codec behavior in response to network conditions.
-     */
-    rtcpFeedback: [
-      // Example values
-      { type: "nack" },
-      { type: "nack", parameter: "pli" },
-    ],
   },
   {
-    /** Indicates this is a video codec configuration */
     kind: "video",
-    /** Specifies the MIME type for the VP8 codec, commonly used for video compression. */
     mimeType: "video/VP8",
-    /** Specifies the clock rate, or the number of timing ticks per second (commonly 90,000 for video). */
     clockRate: 90000,
-    /**
-     * Optional: Specifies codec-specific parameters.
-     * In this case, sets the starting bitrate for the codec.
-     */
     parameters: {
       "x-google-start-bitrate": 1000,
     },
-    preferredPayloadType: 97, // Example value
-    rtcpFeedback: [
-      // Example values
-      { type: "nack" },
-      { type: "ccm", parameter: "fir" },
-      { type: "goog-remb" },
-    ],
+  },
+  {
+    kind: "video",
+    mimeType: "video/VP9",
+    clockRate: 90000,
+    parameters: {
+      "profile-id": 2,
+      "x-google-start-bitrate": 1000,
+    },
+  },
+  {
+    kind: "video",
+    mimeType: "video/H264",
+    clockRate: 90000,
+    parameters: {
+      "packetization-mode": 1,
+      "profile-level-id": "42e01f",
+      "level-asymmetry-allowed": 1,
+      "x-google-start-bitrate": 1000,
+    },
   },
 ];
 
@@ -232,6 +216,8 @@ peers.on("connection", async (socket) => {
     callback({ roomCandidates });
   });
   socket.on("start-recording", async ({ roomName, userId }, callback) => {
+    console.log(roomName,userId);
+    const { rtpPort, rtcpPort } = await getPort();
     const { router } = rooms[`room:${roomName}`];
     const { videoProducer } = candidates[`${roomName}:candidate:${userId}`];
     rtpTransport = await router.createPlainTransport({
@@ -241,7 +227,9 @@ peers.on("connection", async (socket) => {
     });
     await rtpTransport.connect({
       ip: recording.ip,
-      port: recording.videoPort,
+      port: rtpPort,
+      // rtcpPort: rtcpPort,for gstreamer
+      rtcpPort:undefined
     });
     console.log(
       "mediasoup Video RTP SEND transport connected: %s:%d <--> %s:%d (%s)",
@@ -256,9 +244,14 @@ peers.on("connection", async (socket) => {
       rtpCapabilities: router.rtpCapabilities,
       paused: true,
     });
-    recordInfo["video"] = {
-      remoteRtpPort: recording.videoPort,
-      remoteRtcpPort: recording.videoPortRtcp,
+
+    console.log(rtpPort, rtcpPort);
+    if (!recordInfo[`${roomName}:${userId}`]) {
+      recordInfo[`${roomName}:${userId}`] = {};
+    }
+    recordInfo[`${roomName}:${userId}`]["video"] = {
+      remoteRtpPort: rtpPort,
+      remoteRtcpPort: rtcpPort,
       localRtcpPort: rtpTransport.rtcpTuple
         ? rtpTransport.rtcpTuple.localPort
         : undefined,
@@ -266,8 +259,7 @@ peers.on("connection", async (socket) => {
       rtpParameters: rtpConsumer.rtpParameters,
     };
     recordInfo.fileName = Date.now().toString();
-    console.log(recordInfo);
-    ffmpegObject = getProcess(recordInfo);
+    ffmpegObject = getProcess(recordInfo[`${roomName}:${userId}`]);
     ffmpegObject._observer.on("chunk-complete", (fileName) => {
       console.log(`Chunk finished writing: ${fileName}`);
     });
@@ -282,12 +274,15 @@ peers.on("connection", async (socket) => {
     // },5000)
     callback();
   });
-  socket.on("stop-recording", async (callback) => {
+  socket.on("stop-recording", async ({roomName,userId},callback) => {
     console.log(ffmpegObject);
     ffmpegObject.kill();
+    const { rtpPort, rtcpPort } = recordInfo[`${roomName}:${userId}`]["video"];
+    releasePort(rtpPort,rtcpPort)
   });
-  const getProcess = () => {
-    return new FFmpeg(recordInfo);
+  const getProcess = (data) => {
+    return new FFmpeg(data);
+    // return new GStreamer(data);
   };
 
   socket.on(
@@ -364,6 +359,7 @@ peers.on("connection", async (socket) => {
     console.log("consume-resume");
     await videoConsumer?.resume();
   });
+  
 });
 
 const createWebRtcTransport = async (roomName, callback) => {
