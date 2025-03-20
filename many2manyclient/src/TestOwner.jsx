@@ -1,4 +1,3 @@
-
 import { useEffect, useRef, useState } from "react";
 import { Device } from "mediasoup-client";
 
@@ -8,7 +7,7 @@ export default function TestOwner({
   roomName,
   userId,
   roomCandidates,
-  name
+  name,
 }) {
   const remoteVideoRef = useRef(null);
   const [device, setDevice] = useState(null);
@@ -150,6 +149,17 @@ export default function TestOwner({
     startWatching();
   }, [selectedId]);
 
+  const leaveRoom = () => {
+    socket.emit("leave-room", { userId, role: "candidate", roomName }, () => {
+      console.log("User-leaved room successfully");
+    });
+  };
+
+  useEffect(() => {
+    socket.on("userLeft", (message) => {
+      console.log("user disconnected", message);
+    });
+  }, []);
   return (
     <main>
       <video ref={remoteVideoRef} id="remotevideo" autoPlay playsInline />
@@ -175,6 +185,7 @@ export default function TestOwner({
         <button onClick={startWatching} disabled={watching}>
           {watching ? "Watching..." : "Start Watching"}
         </button>
+        <button onClick={leaveRoom}>Leave-Room</button>
       </div>
     </main>
   );

@@ -1,4 +1,4 @@
-import { useState,useEffect ,useRef} from "react";
+import { useState, useEffect, useRef } from "react";
 import { io } from "socket.io-client";
 import { Device } from "mediasoup-client";
 import Candidate from "./Candidate";
@@ -8,45 +8,45 @@ export default function RoomJoin() {
   const [role, setRole] = useState("");
   const [socket, setSocket] = useState(null);
   const [userId, setUserId] = useState("");
-  const [joined,setJoined]=useState(false);
+  const [joined, setJoined] = useState(false);
   const [rtpCapabilities, setRtpCapabilities] = useState(null);
   const [roomCandidates, setRoomCandidates] = useState([]);
-  const [name,setName]=useState("")
+  const [name, setName] = useState("");
   const handleJoinRoom = () => {
-    console.log(roomName, userId);
     if (!roomName.trim() || !userId.trim() || !name) {
       alert("Please enter all fields!");
       return;
     }
-    console.log(socket);
-    socket.emit("joinRoom", { roomName, userId }, (response) => {
+    socket.emit("joinRoom", { roomName, userId, role }, (response) => {
       if (response?.error) {
         console.error("Error creating room:", response.error);
         return;
       }
       console.log("printing rtp capibilities", response.rtpCapabilities);
       setRtpCapabilities(response.rtpCapabilities);
-     
+
       // createDevice(response.rtpCapabilities);
     });
-     if(role === "testOwner"){
-          socket.emit("getUser", { roomName }, async ({ roomCandidates }) => {
-            setRoomCandidates(roomCandidates || []);
-             setJoined(true);
-          });
-     }else {
-       setJoined(true);
-     }
+    if (role === "testOwner") {
+      socket.emit("getUser", { roomName }, async ({ roomCandidates }) => {
+        setRoomCandidates(roomCandidates || []);
+        setJoined(true);
+      });
+    } else {
+      setJoined(true);
+    }
     console.log(`Joining room: ${roomName} as ${role}`);
   };
 
   useEffect(() => {
-    const socket = io("http://13.127.83.66:5000/mediasoup");
+    // const socket = io("http://13.127.83.66:3000/mediasoup");
     // const socket = io("http://localhost:5000/mediasoup");
+    const socket = io("https://proctoring.pro11club.com/mediasoup");
     setSocket(socket);
     socket.on("connection-success", ({ socketId }) => {
       console.log("connection established succesffuly");
     });
+
     return () => {
       socket.disconnect();
     };

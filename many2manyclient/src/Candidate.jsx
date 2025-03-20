@@ -6,7 +6,7 @@ export default function Candidate({
   socket,
   roomName,
   userId,
-  name
+  name,
 }) {
   const videoRef = useRef(null);
   const [device, setDevice] = useState(null);
@@ -36,7 +36,6 @@ export default function Candidate({
     ],
     codecOptions: { videoGoogleStartBitrate: 1000 },
   };
-
 
   const startCamera = async () => {
     try {
@@ -69,7 +68,7 @@ export default function Candidate({
     return new Promise((resolve, reject) => {
       socket.emit(
         "createWebrtcTransport",
-        { sender: true, roomName, userId,name },
+        { sender: true, roomName, userId, name },
         ({ params }) => {
           if (params?.error) {
             console.log(params.error);
@@ -137,7 +136,11 @@ export default function Candidate({
       console.log("Recording started");
     });
   };
-
+  const leaveRoom = () => {
+    socket.emit("leave-room", { userId, role: "candidate", roomName }, () => {
+      console.log("User-leaved room successfully");
+    });
+  };
   const startStreaming = async () => {
     if (streaming) return;
 
@@ -157,10 +160,11 @@ export default function Candidate({
   return (
     <main>
       <video ref={videoRef} id="localvideo" autoPlay playsInline />
-      <div style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
         <button onClick={startStreaming} disabled={streaming}>
           {streaming ? "Streaming..." : "Start Streaming"}
         </button>
+        <button onClick={leaveRoom}>Leave Room</button>
         <button onClick={startRecording}>Start Recording</button>
       </div>
     </main>
